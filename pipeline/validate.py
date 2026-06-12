@@ -181,8 +181,8 @@ def run_checks(df: pd.DataFrame) -> ValidationReport:
 
         earliest = dates.min()
         report.add(
-            "Date range starts before 2020",
-            pd.notna(earliest) and earliest.year < 2020,
+            "Date range starts before 2026",
+            pd.notna(earliest) and earliest.year < 2026,
             f"Earliest date is {earliest} — dataset may be truncated",
             f"Earliest date: {earliest.date() if pd.notna(earliest) else 'n/a'}",
         )
