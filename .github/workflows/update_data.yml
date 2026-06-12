@@ -1,0 +1,67 @@
+# .github/workflows/update_data.yml
+#
+# Runs the full ETL pipeline on a weekly schedule (every Sunday 06:00 UTC),
+# commits the refreshed CSV back to the repo, and validates data quality.
+# Also triggered on every push to main (so you can test it immediately).
+#
+# No secrets needed — data.gov.il is fully public.
+
+name: Update savings data
+
+on:
+  schedule:
+    - cron: "0 6 * * 0" # every Sunday at 06:00 UTC
+  push:
+    branches: [main]
+  workflow_dispatch: # allow manual trigger from GitHub UI
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. set up Python via uv ────────────────────────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      # ── 3. run ETL pipeline ────────────────────────────────────────────────
+      - name: Fetch raw data from API
+        run: uv run python pipeline/fetch.py
+
+      - name: Transform to clean long CSV
+        run: uv run python pipeline/transform.py
+
+      - name: Load into DuckDB
+        run: uv run python pipeline/load.py
+
+      - name: Export Excel report
+        run: uv run python pipeline/export_excel.py
+
+      # ── 4. validate data quality ───────────────────────────────────────────
+      - name: Validate data quality
+        run: uv run python pipeline/validate.py
+
+      # ── 5. run tests ───────────────────────────────────────────────────────
+      - name: Run smoke tests
+        run: uv run pytest tests/ -v
+
+      # ── 6. commit updated CSV back to repo ────────────────────────────────
+      # The DuckDB file is intentionally excluded (.gitignore) — only the
+      # portable CSV is committed so Tableau Public can read it via raw URL.
+      - name: Commit refreshed data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/savings_rates_clean_long.csv
+          git diff --cached --quiet || git commit -m "chore: refresh savings rates data [$(date -u +%Y-%m-%d)]"
+          git push
