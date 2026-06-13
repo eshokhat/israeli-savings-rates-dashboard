@@ -83,22 +83,30 @@ ORDER BY AvgRate DESC;
 
 -- ── Q4. Do rates differ between Under-18 and Above-18 programs? ─────────────
 
+WITH age_pivot AS (
+    SELECT
+        BANK_EN,
+        SAVINGSPLAN_EN,
+        RateType,
+        ROUND(AVG(RateValue) FILTER (
+            WHERE SAVINGSPROGRAMBYAGE_EN = 'Under 18'), 4) AS AvgRate_Under18,
+        ROUND(AVG(RateValue) FILTER (
+            WHERE SAVINGSPROGRAMBYAGE_EN = 'Above 18'), 4) AS AvgRate_Above18
+    FROM savings_rates
+    WHERE RateValue IS NOT NULL
+    GROUP BY BANK_EN, SAVINGSPLAN_EN, RateType
+)
 SELECT
     BANK_EN,
     SAVINGSPLAN_EN,
     RateType,
-    ROUND(AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Under 18'),  4) AS AvgRate_Under18,
-    ROUND(AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Above 18'),  4) AS AvgRate_Above18,
-    ROUND(
-        AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Under 18')
-      - AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Above 18'),
-    4)                                                                            AS Gap_Under_vs_Above
-FROM savings_rates
-WHERE RateValue IS NOT NULL
-GROUP BY BANK_EN, SAVINGSPLAN_EN, RateType
-HAVING AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Under 18') IS NOT NULL
-   AND AVG(RateValue) FILTER (WHERE SAVINGSPROGRAMBYAGE_EN = 'Above 18') IS NOT NULL
-ORDER BY ABS(Gap_Under_vs_Above) DESC;
+    AvgRate_Under18,
+    AvgRate_Above18,
+    ROUND(AvgRate_Under18 - AvgRate_Above18, 4) AS Gap_Under_vs_Above
+FROM age_pivot
+WHERE AvgRate_Under18 IS NOT NULL
+   OR AvgRate_Above18 IS NOT NULL
+ORDER BY ABS(COALESCE(AvgRate_Under18, 0) - COALESCE(AvgRate_Above18, 0)) DESC;
 
 
 -- ── Q5. Interest rate trend over time — MoM change with LAG ─────────────────
@@ -106,38 +114,40 @@ ORDER BY ABS(Gap_Under_vs_Above) DESC;
 WITH monthly AS (
     SELECT
         YEAR_MONTH,
-        INTERESTSDATE,
+        MIN(INTERESTSDATE) AS PeriodStart,
         RateType,
         ROUND(AVG(RateValue), 4) AS AvgRate
     FROM savings_rates
     WHERE RateValue IS NOT NULL
-    GROUP BY YEAR_MONTH, INTERESTSDATE, RateType
+    GROUP BY YEAR_MONTH, RateType
 ),
 with_lag AS (
     SELECT
         YEAR_MONTH,
         RateType,
         AvgRate,
-        LAG(AvgRate) OVER (PARTITION BY RateType ORDER BY INTERESTSDATE) AS PrevMonthRate,
-        ROUND(
-            AvgRate - LAG(AvgRate) OVER (PARTITION BY RateType ORDER BY INTERESTSDATE),
-        4) AS MoM_Delta
+        LAG(AvgRate) OVER (
+            PARTITION BY RateType ORDER BY PeriodStart
+        ) AS PrevMonthRate,
+        ROUND(AvgRate - LAG(AvgRate) OVER (
+            PARTITION BY RateType ORDER BY PeriodStart
+        ), 4) AS MoM_Delta
     FROM monthly
 )
 SELECT
-    YEAR_MONTH,
-    RateType,
-    AvgRate,
+    YEAR_MONTH      AS "Year-Month",
+    RateType        AS "Rate Type",
+    AvgRate         AS "Avg Rate (%)",
     PrevMonthRate,
-    MoM_Delta,
+    MoM_Delta       AS "MoM Δ",
     CASE
-        WHEN MoM_Delta > 0  THEN '↑ Rising'
-        WHEN MoM_Delta < 0  THEN '↓ Falling'
-        WHEN MoM_Delta = 0  THEN '→ Stable'
-        ELSE                     'n/a'
+        WHEN MoM_Delta > 0 THEN '↑ Rising'
+        WHEN MoM_Delta < 0 THEN '↓ Falling'
+        WHEN MoM_Delta = 0 THEN '→ Stable'
+        ELSE 'n/a'
     END AS Trend
 FROM with_lag
-ORDER BY RateType, YEAR_MONTH;
+ORDER BY "Rate Type", "Year-Month";
 
 
 -- ── Q6. Volatility ranking — how stable is each bank? ───────────────────────

@@ -4,6 +4,10 @@ Automated ETL pipeline that fetches interest rate data for Israeli children's sa
 
 Data updates weekly via GitHub Actions — no manual steps required.
 
+## Dashboard
+
+[View on Tableau Public](https://public.tableau.com/views/IsraeliSavingsPlansDashboard/Dashboard1-MarketOverview)
+
 ---
 
 ## Business questions answered
@@ -15,6 +19,19 @@ Data updates weekly via GitHub Actions — no manual steps required.
 5. How have rates trended month-over-month across rate types?
 6. Which banks are most volatile — and which are most stable over time?
 7. What is the single best deal available right now by plan and age group?
+
+---
+
+## Key findings
+
+- **Mizrahi-Tefahot** leads today with 4.45% Fixed (No Linkage); **Leumi** leads historically (avg 3.94%)
+- **Yahav** is a consistent underperformer across almost all metrics
+- Variable (Prime Spread) rates are effectively frozen — banks compete on Fixed rates, not Variable spreads
+- The market is in a slow downward trend: Fixed (No Linkage) dropped ~4% over 14 months
+- Most savings plans are age-segregated — Under 18 and Above 18 products rarely overlap
+- **Discount** and **Mercantile Discount** are the most stable banks for Fixed (No Linkage)
+
+Full analysis: [analysis/insights.md](analysis/insights.md)
 
 ---
 
@@ -34,7 +51,7 @@ pipeline/transform.py      → data/savings_rates_clean_long.csv
       │          ├──▶ analysis/queries.sql     (SQL analytical layer)
       │          └──▶ pipeline/export_excel.py → excel/savings_analysis.xlsx
       │
-      └──▶ Tableau Public dashboard  (reads CSV via raw GitHub URL)
+      └──▶ Tableau Public dashboard  (manually refreshed from local CSV)
 
 GitHub Actions runs the full pipeline every Sunday and commits the refreshed CSV.
 ```
@@ -48,9 +65,9 @@ GitHub Actions runs the full pipeline every Sunday and commits the refreshed CSV
 | Ingestion | Python · requests · pagination + retry logic |
 | Transformation | pandas · data cleaning · Hebrew→English mapping · long format |
 | Storage | DuckDB · analytical views (`vw_best_rates`, `vw_volatility`) |
-| SQL analysis | DuckDB SQL · window functions · CTEs · `QUALIFY` |
+| SQL analysis | DuckDB SQL · window functions · CTEs · `QUALIFY` · `NTILE` |
 | Reporting | Excel (openpyxl) · 6 sheets (Contents + 5 analytical) for stakeholders |
-| Visualisation | Tableau Public |
+| Visualisation | Tableau Public · LOD expressions · calculated fields |
 | Automation | GitHub Actions · weekly schedule · auto-commit |
 | Testing | pytest · 19 unit tests · data quality checks (validate.py) |
 
@@ -73,7 +90,7 @@ GitHub Actions runs the full pipeline every Sunday and commits the refreshed CSV
 ├── data/
 │   └── savings_rates_clean_long.csv   # Clean dataset (auto-updated weekly)
 ├── excel/
-│   └── savings_analysis.xlsx          # Stakeholder report (5 sheets)
+│   └── savings_analysis.xlsx          # Stakeholder report (6 sheets)
 └── .github/workflows/
     └── update_data.yml     # Weekly CI/CD pipeline
 ```
@@ -93,7 +110,17 @@ uv run python pipeline/load.py
 
 # Analytics
 uv run python pipeline/export_excel.py
-duckdb data/savings.duckdb < analysis/queries.sql
+uv run python -c "
+import duckdb
+con = duckdb.connect('data/savings.duckdb')
+sql = open('analysis/queries.sql').read()
+for i, q in enumerate([s.strip() for s in sql.split(';') if s.strip()], 1):
+    try:
+        print(f'\n── Q{i} ──')
+        print(con.execute(q).df().to_string(index=False))
+    except Exception as e:
+        print(f'Q{i} skipped: {e}')
+"
 
 # Tests and validation
 uv run pytest tests/ -v
@@ -102,7 +129,16 @@ uv run python pipeline/validate.py
 
 ---
 
+## Known Limitations & Next Steps
+
+- **Variable (Prime Spread)** represents the spread to Israel's Prime Rate (~4.5%), not standalone yield. Actual return = Prime Rate + Spread. A future version will join this dataset with Bank of Israel rate history to compute true yields.
+- Data available from May 2025 only (API limitation — earlier history not exposed via public endpoint).
+- Tableau dashboard refreshed manually; automatic refresh requires Tableau Cloud.
+- Q4 gap analysis (Under 18 vs Above 18) limited by age-segregated product structure in source data.
+
+---
+
 ## Data source
 
 [Israeli Ministry of Finance — Children's Savings Plans Interest Rates](https://data.gov.il/dataset/savingsplaninterest)  
-Public API · 9 banks · 3 plan types · 3 rate types · data from 2017 up to date
+Public API · 9 banks · 3 plan types · 3 rate types · updated regularly
